@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 from crackfann.cli.common import ensure_output_dir, load_config
 from crackfann.core.dataset import Dataset
@@ -71,8 +72,14 @@ def main() -> None:
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
-    cfg = load_config(args.config)
     output_dir = ensure_output_dir(args.run_id, args.out)
+    cfg = load_config(args.config)
+    result = run_config(cfg, args.run_id, output_dir, config_path=args.config)
+    print(json.dumps(result, indent=2))
+
+
+def run_config(cfg: dict, run_id: str, output_dir: str | Path, config_path: str | None = None) -> dict:
+    output_dir = Path(output_dir)
     dataset_cfg = cfg.get("dataset", {})
     dataset = Dataset.synthetic(
         n=int(dataset_cfg.get("n", 10000)),
@@ -102,14 +109,14 @@ def main() -> None:
     logger.write(
         output_dir,
         manifest={
-            "run_id": args.run_id,
-            "config": args.config,
+            "run_id": run_id,
+            "config": config_path or "<in-memory>",
             "dataset_n": dataset.n,
             "dataset_d": dataset.d,
             "queries": len(workload),
         },
     )
-    print(json.dumps({"run_dir": str(output_dir), "queries": len(workload), "actions": len(system.action_log)}, indent=2))
+    return {"run_dir": str(output_dir), "queries": len(workload), "actions": len(system.action_log)}
 
 
 if __name__ == "__main__":

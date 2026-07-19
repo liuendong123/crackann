@@ -103,6 +103,21 @@ python -m crackfann.cli.run_workload \
 reduce cumulative distance count, and keep `covered_cell_count_mean` and P95
 latency close to or below the no-penalty adaptive run.
 
+Run the penalty sweep:
+
+```bash
+python scripts/run_v03_penalty_sweep.py \
+  --base_config configs/paper/synthetic_adaptive_hnswlib.json \
+  --fixed_config configs/paper/synthetic_fixed4_template_hnswlib.json \
+  --out_root outputs/v03_penalty_sweep_hnswlib \
+  --min_net_gain 25,50,100 \
+  --cover_penalty_weight 200,400,800 \
+  --max_cover_growth 0.35,0.5,1.0
+```
+
+The sweep writes `sweep_summary.csv` plus `best.json`. Use `--limit 2` for a
+quick smoke test before running the full grid.
+
 ## Current Scope
 
 This is v0.0/v0.1 of the plan:
