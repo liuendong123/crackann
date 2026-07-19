@@ -72,6 +72,37 @@ Fixed coarse baselines with the same template workload are provided at
 `configs/paper/synthetic_fixed4_template_hnswlib.json` and
 `configs/paper/synthetic_fixed4_template_faiss_hnsw.json`.
 
+## v0.3 Scheduler Metrics And Split Penalty
+
+The v0.3 gate compares:
+
+- fixed coarse cells;
+- adaptive splitting without penalty;
+- adaptive splitting with scan-saving minus cover-growth penalty.
+
+Example HNSWLIB run:
+
+```bash
+python -m crackfann.cli.run_workload \
+  --config configs/paper/synthetic_fixed4_template_hnswlib.json \
+  --run_id fixed4_template_hnswlib
+
+python -m crackfann.cli.run_workload \
+  --config configs/paper/synthetic_adaptive_no_penalty_hnswlib.json \
+  --run_id adaptive_no_penalty_hnswlib
+
+python -m crackfann.cli.run_workload \
+  --config configs/paper/synthetic_adaptive_hnswlib.json \
+  --run_id adaptive_penalty_hnswlib
+```
+
+`query_log.csv` and `summary_by_phase.csv` now include scheduler diagnostics:
+`covered_cell_count`, `scheduler_steps`, `l3_cells`,
+`exact_residual_cells`, `l3_distance_count`, and
+`exact_residual_distance_count`. The v0.3 target is to keep recall at target,
+reduce cumulative distance count, and keep `covered_cell_count_mean` and P95
+latency close to or below the no-penalty adaptive run.
+
 ## Current Scope
 
 This is v0.0/v0.1 of the plan:

@@ -27,6 +27,9 @@ class SplitPolicyIntegrationTest(unittest.TestCase):
                 "min_child_size": 20,
                 "cooldown_queries": 0,
                 "max_splits_per_tick": 1,
+                "min_net_gain": 0,
+                "cover_penalty_weight": 0,
+                "max_cover_growth": 1.0,
             },
         }
         system = CrackFANNSystem(cfg)
@@ -52,4 +55,3 @@ class SplitPolicyIntegrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

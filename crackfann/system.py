@@ -40,6 +40,7 @@ class CrackFANNSystem:
         self.scheduler: CrossCellScheduler | None = None
         self.action_log: list[ActionRecord] = []
         self.boundary_observations: dict[int, list[float]] = {}
+        self.range_observations: dict[int, list[tuple[float, float]]] = {}
         self.last_split_ts: dict[int, int] = {}
         self.last_plan_reason = ""
 
@@ -137,17 +138,26 @@ class CrackFANNSystem:
                 continue
             if split_count >= self.split_policy.max_splits_per_tick:
                 break
-            decision = self.split_policy.decide(
+            proposal = self.split_policy.propose_cut(
                 cell=cell,
                 boundary_samples=self.boundary_observations.get(cell.cell_id, []),
                 timestamp=timestamp,
                 last_split_ts=self.last_split_ts.get(cell.cell_id),
                 leaf_count=len(tree.leaf_ids),
             )
-            if not decision.accept or decision.cut is None:
+            if not proposal.accept or proposal.cut is None:
                 continue
-            left_count, right_count = self._estimate_split_counts(cell, decision.cut, values)
+            left_count, right_count = self._estimate_split_counts(cell, proposal.cut, values)
             if left_count < self.split_policy.min_child_size or right_count < self.split_policy.min_child_size:
+                continue
+            decision = self.split_policy.evaluate_candidate(
+                cell=cell,
+                proposal=proposal,
+                query_ranges=self.range_observations.get(cell.cell_id, []),
+                left_count=left_count,
+                right_count=right_count,
+            )
+            if not decision.accept or decision.cut is None:
                 continue
             left, right = tree.split_leaf(cell.cell_id, decision.cut)
             self._materialize_l1_cell(left.cell_id, values)
@@ -158,7 +168,19 @@ class CrackFANNSystem:
             self.boundary_observations[right.cell_id] = [
                 value for value in self.boundary_observations.get(cell.cell_id, []) if right.low < value < right.high
             ]
+            parent_ranges = self.range_observations.get(cell.cell_id, [])
+            self.range_observations[left.cell_id] = [
+                (max(low, left.low), min(high, left.high))
+                for low, high in parent_ranges
+                if low <= left.high and left.low <= high
+            ]
+            self.range_observations[right.cell_id] = [
+                (max(low, right.low), min(high, right.high))
+                for low, high in parent_ranges
+                if low <= right.high and right.low <= high
+            ]
             self.boundary_observations.pop(cell.cell_id, None)
+            self.range_observations.pop(cell.cell_id, None)
             self.last_split_ts[left.cell_id] = timestamp
             self.last_split_ts[right.cell_id] = timestamp
             self.action_log.append(
@@ -171,7 +193,12 @@ class CrackFANNSystem:
                     predicted_gain=decision.score,
                     realized_gain=0.0,
                     build_ms=0.0,
-                    reason=f"{decision.reason}:cut={decision.cut:.6g}->children={left.cell_id},{right.cell_id}",
+                    reason=(
+                        f"{decision.reason}:cut={decision.cut:.6g}->children={left.cell_id},{right.cell_id}"
+                        f";scan_saving={decision.scan_saving:.3f}"
+                        f";cover_penalty={decision.cover_penalty:.3f}"
+                        f";cover_growth={decision.cover_growth:.3f}"
+                    ),
                 )
             )
             split_count += 1
@@ -197,6 +224,10 @@ class CrackFANNSystem:
                 samples.append(float(predicate.high))
             if len(samples) > 512:
                 del samples[: len(samples) - 512]
+            ranges = self.range_observations.setdefault(cell.cell_id, [])
+            ranges.append((float(part.low), float(part.high)))
+            if len(ranges) > 512:
+                del ranges[: len(ranges) - 512]
 
     def _materialize_l1_cell(self, cell_id: int, values: np.ndarray | None = None) -> None:
         dataset = self._dataset()
@@ -242,6 +273,7 @@ class CrackFANNSystem:
                     "query_count_total": cell.query_count_total,
                     "query_count_ema": cell.query_count_ema,
                     "boundary_samples": len(self.boundary_observations.get(cell.cell_id, [])),
+                    "range_samples": len(self.range_observations.get(cell.cell_id, [])),
                     "memory_bytes": cell.memory_bytes,
                     "state": cell.state,
                 }

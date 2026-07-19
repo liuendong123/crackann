@@ -414,7 +414,10 @@ def _has_module(name: str) -> bool:
     import importlib.util
 
     _ensure_local_ann_deps_path()
-    return importlib.util.find_spec(name) is not None
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, OSError, PermissionError):
+        return False
 
 
 def _import_faiss():
@@ -434,7 +437,7 @@ def _faiss_has_hnsw() -> bool:
         return False
     try:
         faiss = _import_faiss()
-    except MissingANNDependencyError:
+    except (MissingANNDependencyError, ImportError, OSError, PermissionError):
         return False
     return hasattr(faiss, "IndexHNSWFlat")
 

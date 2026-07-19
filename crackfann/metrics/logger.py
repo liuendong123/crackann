@@ -35,6 +35,15 @@ class RunLogger:
                 "quality_risk": int(result.quality_risk),
                 "fallback_reason": result.extra.get("reason", ""),
                 "source": result.extra.get("source", ""),
+                "covered_cell_count": result.extra.get("covered_cell_count", 0),
+                "full_cell_count": result.extra.get("full_cell_count", 0),
+                "partial_cell_count": result.extra.get("partial_cell_count", 0),
+                "l3_cover_cell_count": result.extra.get("l3_cover_cell_count", 0),
+                "scheduler_steps": result.extra.get("scheduler_steps", 0),
+                "l3_cells": result.extra.get("l3_cells", 0),
+                "exact_residual_cells": result.extra.get("exact_residual_cells", 0),
+                "l3_distance_count": result.extra.get("l3_distance_count", 0),
+                "exact_residual_distance_count": result.extra.get("exact_residual_distance_count", 0),
             }
         )
 
@@ -75,6 +84,12 @@ def summarize_by_phase(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         recalls = np.array([float(row["recall"]) for row in phase_rows], dtype=np.float64)
         latencies = np.array([float(row["latency_ms"]) for row in phase_rows], dtype=np.float64)
         distances = np.array([float(row["distance_count"]) for row in phase_rows], dtype=np.float64)
+        covered_cells = np.array([float(row.get("covered_cell_count", 0.0)) for row in phase_rows], dtype=np.float64)
+        scheduler_steps = np.array([float(row.get("scheduler_steps", 0.0)) for row in phase_rows], dtype=np.float64)
+        exact_residual = np.array(
+            [float(row.get("exact_residual_distance_count", 0.0)) for row in phase_rows],
+            dtype=np.float64,
+        )
         summary.append(
             {
                 "phase": phase,
@@ -84,8 +99,10 @@ def summarize_by_phase(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "p95_latency_ms": float(np.percentile(latencies, 95)),
                 "distance_count_mean": float(distances.mean()),
                 "cumulative_distance_count": float(distances.sum()),
+                "covered_cell_count_mean": float(covered_cells.mean()),
+                "scheduler_steps_mean": float(scheduler_steps.mean()),
+                "exact_residual_distance_mean": float(exact_residual.mean()),
                 "quality_risk_count": int(sum(int(row["quality_risk"]) for row in phase_rows)),
             }
         )
     return summary
-

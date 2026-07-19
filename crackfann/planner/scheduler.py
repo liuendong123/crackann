@@ -34,8 +34,11 @@ class CrossCellScheduler:
 
     def execute(self, plan: QueryPlan, query: FilteredQuery, cover: list[CoverPart]) -> SearchResult:
         start = time.perf_counter()
+        cover_metrics = self._cover_metrics(cover)
+        execution_metrics: dict[str, int | float] = {}
         if plan.plan_type == PlanType.BASE_POSTFILTER:
             batch = self.base_index.search_postfilter(query.vector, query.predicates, query.k)
+            execution_metrics = {"scheduler_steps": 1, "l3_distance_count": 0, "exact_residual_distance_count": 0}
         elif plan.plan_type == PlanType.PREFILTER_EXACT:
             ids = self.dataset.ids_for_predicates(query.predicates)
             batch = topk_from_ids(
@@ -46,10 +49,16 @@ class CrossCellScheduler:
                 source="prefilter_exact",
                 predicate_checks=self.dataset.n,
             )
+            execution_metrics = {
+                "scheduler_steps": 1,
+                "l3_distance_count": 0,
+                "exact_residual_distance_count": batch.distance_computations,
+            }
         elif plan.plan_type in {PlanType.CELL_L3, PlanType.HYBRID_CELLS}:
-            batch = self._execute_hybrid(plan, query, cover)
+            batch, execution_metrics = self._execute_hybrid(plan, query, cover)
         else:
             batch = self.base_index.search_postfilter(query.vector, query.predicates, query.k)
+            execution_metrics = {"scheduler_steps": 1, "l3_distance_count": 0, "exact_residual_distance_count": 0}
 
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         return SearchResult(
@@ -61,35 +70,66 @@ class CrossCellScheduler:
             plan_id=plan.plan_type.value,
             visited_cells=plan.cell_ids,
             quality_risk=batch.ids.size < query.k,
-            extra={"source": batch.source, "reason": plan.reason},
+            extra={"source": batch.source, "reason": plan.reason, **cover_metrics, **execution_metrics},
         )
 
-    def _execute_hybrid(self, plan: QueryPlan, query: FilteredQuery, cover: list[CoverPart]) -> CandidateBatch:
+    def _execute_hybrid(self, plan: QueryPlan, query: FilteredQuery, cover: list[CoverPart]) -> tuple[CandidateBatch, dict[str, int]]:
         batches: list[CandidateBatch] = []
+        l3_cells = 0
+        exact_residual_cells = 0
+        l3_distance_count = 0
+        exact_residual_distance_count = 0
         for part in cover:
             cell = self.cells[part.cell_id]
             if part.full and cell.level >= MaterializationLevel.L3_LOCAL_ANN and cell.ann_handle:
-                batches.append(self.local_ann_store.search(cell.ann_handle, query.vector, query.k, plan.budget))
+                batch = self.local_ann_store.search(cell.ann_handle, query.vector, query.k, plan.budget)
+                batches.append(batch)
+                l3_cells += 1
+                l3_distance_count += batch.distance_computations
                 continue
             ids = self._ids_for_cover_part(part, query)
             if ids.size:
-                batches.append(
-                    topk_from_ids(
-                        self.dataset.vectors,
-                        ids,
-                        query.vector,
-                        query.k,
-                        source="hybrid_exact_residual",
-                        predicate_checks=int(ids.size),
-                    )
+                batch = topk_from_ids(
+                    self.dataset.vectors,
+                    ids,
+                    query.vector,
+                    query.k,
+                    source="hybrid_exact_residual",
+                    predicate_checks=int(ids.size),
                 )
+                batches.append(batch)
+                exact_residual_cells += 1
+                exact_residual_distance_count += batch.distance_computations
         merged = merge_topk(batches, query.k)
         valid_mask = self.dataset.mask_for_predicates(query.predicates)
         if merged.ids.size:
             keep = valid_mask[merged.ids]
             merged.ids = merged.ids[keep]
             merged.distances = merged.distances[keep]
-        return merged
+        return merged, {
+            "scheduler_steps": len(batches),
+            "l3_cells": l3_cells,
+            "exact_residual_cells": exact_residual_cells,
+            "l3_distance_count": l3_distance_count,
+            "exact_residual_distance_count": exact_residual_distance_count,
+        }
+
+    def _cover_metrics(self, cover: list[CoverPart]) -> dict[str, int]:
+        full_cell_count = sum(1 for part in cover if part.full)
+        partial_cell_count = len(cover) - full_cell_count
+        l3_cover_cell_count = sum(
+            1
+            for part in cover
+            if part.full
+            and self.cells[part.cell_id].level >= MaterializationLevel.L3_LOCAL_ANN
+            and self.cells[part.cell_id].ann_handle
+        )
+        return {
+            "covered_cell_count": len(cover),
+            "full_cell_count": full_cell_count,
+            "partial_cell_count": partial_cell_count,
+            "l3_cover_cell_count": l3_cover_cell_count,
+        }
 
     def _ids_for_cover_part(self, part: CoverPart, query: FilteredQuery) -> np.ndarray:
         cell = self.cells[part.cell_id]

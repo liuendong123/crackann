@@ -37,7 +37,10 @@
     "min_child_size": 150,
     "cooldown_queries": 100,
     "max_splits_per_tick": 2,
-    "min_width_fraction": 0.05
+    "min_width_fraction": 0.05,
+    "min_net_gain": 50,
+    "cover_penalty_weight": 500,
+    "max_cover_growth": 0.35
   },
   "designer": {
     "tick_interval": 50
