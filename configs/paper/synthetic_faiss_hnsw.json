@@ -1,0 +1,50 @@
+{
+  "seed": 42,
+  "dataset": {
+    "n": 20000,
+    "d": 32,
+    "attr_mode": "correlated",
+    "noise": 0.04
+  },
+  "predicate_tree": {
+    "num_cells": 16
+  },
+  "materialization": {
+    "exact_scan_threshold": 800
+  },
+  "planner": {
+    "broad_selectivity": 0.2,
+    "broad_cell_threshold": 12,
+    "l3_probe_buckets": 64,
+    "l3_candidate_fraction": 0.25
+  },
+  "local_ann": {
+    "backend": "faiss_hnsw",
+    "M": 16,
+    "ef_construction": 100,
+    "ef_search": 64
+  },
+  "promotion": {
+    "min_observations": 25,
+    "min_cell_size": 500,
+    "build_cost_per_work": 1.0,
+    "future_query_multiplier": 1.5,
+    "promotion_margin": 0.0
+  },
+  "designer": {
+    "tick_interval": 100
+  },
+  "monitor": {
+    "alpha": 0.05
+  },
+  "workload": {
+    "kind": "long_tail",
+    "n_queries": 1500,
+    "zipf_s": 1.25,
+    "hot_regions": 8,
+    "range_width": 0.06,
+    "k": 10,
+    "broad_ratio": 0.08
+  }
+}
+

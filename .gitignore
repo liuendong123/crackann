@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+outputs/
+.codex-doc-review/
+.ann_deps/
+.ann_deps_faiss*/
+.codex_ssh_*

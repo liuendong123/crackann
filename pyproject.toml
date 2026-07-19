@@ -1,0 +1,14 @@
+[project]
+name = "crackfann"
+version = "0.1.0"
+description = "Workload-driven progressive physical design for filtered ANN experiments."
+requires-python = ">=3.11"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+faiss = ["faiss-cpu"]
+hnsw = ["hnswlib"]
+ann = ["faiss-cpu", "hnswlib"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
