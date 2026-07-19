@@ -48,6 +48,30 @@ python -m crackfann.cli.run_workload --config configs/paper/synthetic_hnswlib.js
 The FAISS/HNSW paths are optional: if `faiss` or `hnswlib` is missing, selecting
 that backend fails loudly with an install hint instead of silently falling back.
 
+## v0.2 Adaptive Tree
+
+The v0.2 prototype can split predicate cells from repeated query-boundary
+observations before promoting hot cells to L3. Run it on a Linux server with
+`hnswlib` or FAISS available:
+
+```bash
+python -m crackfann.cli.run_workload \
+  --config configs/paper/synthetic_adaptive_hnswlib.json \
+  --run_id adaptive_hnswlib
+
+python -m crackfann.cli.analyze \
+  --run_dir outputs/adaptive_hnswlib \
+  --recall_target 0.95
+```
+
+Compare it against a fixed-cell run with the same backend. The first v0.2 gate is
+whether `action_log.csv` contains useful `SPLIT` actions before `PROMOTE`, while
+keeping recall at target and lowering cumulative distance count or memory-time.
+
+Fixed coarse baselines with the same template workload are provided at
+`configs/paper/synthetic_fixed4_template_hnswlib.json` and
+`configs/paper/synthetic_fixed4_template_faiss_hnsw.json`.
+
 ## Current Scope
 
 This is v0.0/v0.1 of the plan:

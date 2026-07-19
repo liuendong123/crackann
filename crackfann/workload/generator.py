@@ -43,6 +43,35 @@ class WorkloadGenerator:
             queries.append(self._query(query_id, region, width, k, phase))
         return queries
 
+    def template_long_tail(
+        self,
+        n_queries: int,
+        zipf_s: float = 1.4,
+        templates: int = 8,
+        range_width: float = 0.05,
+        k: int = 10,
+        boundary_jitter: float = 0.0,
+        phase: str = "template_long_tail",
+    ) -> list[FilteredQuery]:
+        regions = self._template_regions(templates, range_width)
+        ranks = np.arange(1, templates + 1, dtype=np.float64)
+        probs = 1.0 / np.power(ranks, zipf_s)
+        probs /= probs.sum()
+        queries = []
+        for query_id in range(n_queries):
+            region = regions[int(self.rng.choice(templates, p=probs))]
+            if boundary_jitter > 0:
+                span = self.attr_max - self.attr_min
+                delta_low = float(self.rng.normal(0.0, boundary_jitter * span))
+                delta_high = float(self.rng.normal(0.0, boundary_jitter * span))
+                jittered = Region(
+                    max(self.attr_min, min(region.low + delta_low, region.high)),
+                    min(self.attr_max, max(region.high + delta_high, region.low)),
+                )
+                region = jittered
+            queries.append(self._query_exact_range(query_id, region, k, phase))
+        return queries
+
     def emerging(
         self,
         cold_queries: int,
@@ -109,11 +138,27 @@ class WorkloadGenerator:
         edges = np.linspace(self.attr_min, self.attr_max, count + 1)
         return [Region(float(edges[i]), float(edges[i + 1])) for i in range(count)]
 
+    def _template_regions(self, count: int, range_width: float) -> list[Region]:
+        span = self.attr_max - self.attr_min
+        width = span * range_width
+        centers = np.linspace(self.attr_min + width / 2.0, self.attr_max - width / 2.0, count)
+        regions = []
+        for center in centers:
+            low = max(self.attr_min, float(center - width / 2.0))
+            high = min(self.attr_max, float(center + width / 2.0))
+            regions.append(Region(low, high))
+        return regions
+
     def _query(self, query_id: int, region: Region, width: float, k: int, phase: str) -> FilteredQuery:
         center = float(self.rng.uniform(region.low, region.high))
         half = width * (self.attr_max - self.attr_min) / 2.0
         low = max(self.attr_min, center - half)
         high = min(self.attr_max, center + half)
+        return self._query_exact_range(query_id, Region(low, high), k, phase)
+
+    def _query_exact_range(self, query_id: int, region: Region, k: int, phase: str) -> FilteredQuery:
+        low = region.low
+        high = region.high
         mask = (self.dataset.attr_values(0) >= low) & (self.dataset.attr_values(0) <= high)
         ids = self.dataset.ids[mask]
         if ids.size:
@@ -129,4 +174,3 @@ class WorkloadGenerator:
             timestamp=query_id,
             phase=phase,
         )
-

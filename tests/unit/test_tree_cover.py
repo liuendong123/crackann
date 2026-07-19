@@ -25,7 +25,18 @@ class TreeCoverTest(unittest.TestCase):
             counts += tree.mask_for_cell(values, cell).astype(np.int64)
         self.assertTrue(np.all(counts == 1))
 
+    def test_split_leaf_preserves_ordered_cover(self) -> None:
+        values = np.linspace(0.0, 1.0, 100, dtype=np.float32)
+        tree = PredicateTree.from_quantiles(values, num_cells=2)
+        original = tree.leaf_ids[0]
+        parent = tree.cells[original]
+        cut = (parent.low + parent.high) / 2.0
+        left, right = tree.split_leaf(original, cut)
+        self.assertNotIn(original, tree.cells)
+        self.assertEqual(left.high, right.low)
+        self.assertEqual(tree.leaf_ids[:2], [left.cell_id, right.cell_id])
+        tree.validate()
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -23,6 +23,15 @@ def build_workload(generator: WorkloadGenerator, cfg: dict):
             k=int(cfg.get("k", 10)),
             broad_ratio=float(cfg.get("broad_ratio", 0.0)),
         )
+    if kind == "template_long_tail":
+        return generator.template_long_tail(
+            n_queries=n_queries,
+            zipf_s=float(cfg.get("zipf_s", 1.4)),
+            templates=int(cfg.get("templates", cfg.get("hot_regions", 8))),
+            range_width=float(cfg.get("range_width", 0.05)),
+            k=int(cfg.get("k", 10)),
+            boundary_jitter=float(cfg.get("boundary_jitter", 0.0)),
+        )
     if kind == "emerging":
         return generator.emerging(
             cold_queries=int(cfg.get("cold_queries", n_queries // 4)),
@@ -105,4 +114,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

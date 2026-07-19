@@ -1,0 +1,60 @@
+{
+  "seed": 42,
+  "dataset": {
+    "n": 20000,
+    "d": 32,
+    "attr_mode": "correlated",
+    "noise": 0.04
+  },
+  "predicate_tree": {
+    "num_cells": 4
+  },
+  "materialization": {
+    "exact_scan_threshold": 800
+  },
+  "planner": {
+    "broad_selectivity": 0.2,
+    "broad_cell_threshold": 12,
+    "l3_probe_buckets": 64,
+    "l3_candidate_fraction": 0.25
+  },
+  "local_ann": {
+    "backend": "hnswlib",
+    "M": 16,
+    "ef_construction": 200,
+    "ef_search": 64
+  },
+  "promotion": {
+    "min_observations": 25,
+    "min_cell_size": 500,
+    "build_cost_per_work": 1.0,
+    "future_query_multiplier": 1.5,
+    "promotion_margin": 0.0
+  },
+  "split": {
+    "enabled": true,
+    "max_leaf_cells": 32,
+    "min_observations": 25,
+    "min_boundary_hits": 20,
+    "min_cell_size": 1000,
+    "min_child_size": 500,
+    "cooldown_queries": 200,
+    "max_splits_per_tick": 2,
+    "min_width_fraction": 0.05
+  },
+  "designer": {
+    "tick_interval": 100
+  },
+  "monitor": {
+    "alpha": 0.05
+  },
+  "workload": {
+    "kind": "template_long_tail",
+    "n_queries": 2000,
+    "zipf_s": 1.6,
+    "templates": 8,
+    "range_width": 0.04,
+    "k": 10,
+    "boundary_jitter": 0.0
+  }
+}

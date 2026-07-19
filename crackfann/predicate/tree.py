@@ -19,6 +19,7 @@ class PredicateTree:
     def __init__(self, attr_id: int, cells: dict[int, PredicateCell]) -> None:
         self.attr_id = attr_id
         self.cells = cells
+        self._next_cell_id = (max(cells) + 1) if cells else 0
 
     @classmethod
     def from_quantiles(cls, values: np.ndarray, num_cells: int, attr_id: int = 0) -> "PredicateTree":
@@ -48,7 +49,7 @@ class PredicateTree:
 
     @property
     def leaf_ids(self) -> list[int]:
-        return sorted(self.cells)
+        return [cell.cell_id for cell in sorted(self.cells.values(), key=lambda cell: (cell.low, cell.high, cell.cell_id))]
 
     def cover(self, low: float, high: float) -> list[CoverPart]:
         parts: list[CoverPart] = []
@@ -66,6 +67,37 @@ class PredicateTree:
             return (values >= cell.low) & (values <= cell.high)
         return (values >= cell.low) & (values < cell.high)
 
+    def split_leaf(self, cell_id: int, cut: float) -> tuple[PredicateCell, PredicateCell]:
+        parent = self.cells[cell_id]
+        if not parent.low < cut < parent.high:
+            raise ValueError(f"Split cut {cut} is outside cell {cell_id}: [{parent.low}, {parent.high}]")
+        left_id = self._next_cell_id
+        right_id = self._next_cell_id + 1
+        self._next_cell_id += 2
+        left = PredicateCell(
+            cell_id=left_id,
+            parent_id=cell_id,
+            left_child=None,
+            right_child=None,
+            low=parent.low,
+            high=float(cut),
+            data_count=0,
+        )
+        right = PredicateCell(
+            cell_id=right_id,
+            parent_id=cell_id,
+            left_child=None,
+            right_child=None,
+            low=float(cut),
+            high=parent.high,
+            data_count=0,
+        )
+        del self.cells[cell_id]
+        self.cells[left_id] = left
+        self.cells[right_id] = right
+        self.validate()
+        return left, right
+
     def validate(self) -> None:
         previous_high: float | None = None
         for cell_id in self.leaf_ids:
@@ -75,4 +107,3 @@ class PredicateTree:
             if previous_high is not None and cell.low < previous_high - 1e-9:
                 raise ValueError("Cells overlap")
             previous_high = cell.high
-

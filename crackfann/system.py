@@ -12,6 +12,7 @@ from crackfann.core.types import FilteredQuery
 from crackfann.designer.actions import ActionRecord
 from crackfann.designer.monitor import ema
 from crackfann.designer.promotion import PromotionPolicy
+from crackfann.designer.split_merge import SplitPolicy
 from crackfann.materialization.bitmap_store import BitmapStore
 from crackfann.materialization.catalog import MaterializationCatalog
 from crackfann.materialization.local_ann_store import create_local_ann_store
@@ -35,8 +36,11 @@ class CrackFANNSystem:
         planner_cfg.setdefault("exact_scan_threshold", self.config.get("materialization", {}).get("exact_scan_threshold", 5000))
         self.planner = QueryPlanner(planner_cfg)
         self.promotion_policy = PromotionPolicy(self.config.get("promotion", {}))
+        self.split_policy = SplitPolicy(self.config.get("split", {}))
         self.scheduler: CrossCellScheduler | None = None
         self.action_log: list[ActionRecord] = []
+        self.boundary_observations: dict[int, list[float]] = {}
+        self.last_split_ts: dict[int, int] = {}
         self.last_plan_reason = ""
 
     @classmethod
@@ -61,21 +65,9 @@ class CrackFANNSystem:
         self.tree = PredicateTree.from_quantiles(dataset.attr_values(attr_id), num_cells=num_cells, attr_id=attr_id)
         values = dataset.attr_values(attr_id)
         for cell in self.tree.cells.values():
-            mask = self.tree.mask_for_cell(values, cell)
-            ids = dataset.ids[mask]
-            cell.data_count = int(ids.size)
-            cell.bitmap_handle = self.bitmap_store.build(cell.cell_id, ids)
-            cell.level = MaterializationLevel.L1_BITMAP
-            cell.memory_bytes = self.bitmap_store.memory_bytes(cell.bitmap_handle)
+            self._materialize_l1_cell(cell.cell_id, values)
         self.catalog = MaterializationCatalog(self.tree.cells)
-        self.scheduler = CrossCellScheduler(
-            dataset=dataset,
-            base_index=self.base_index,
-            tree=self.tree,
-            cells=self.tree.cells,
-            bitmap_store=self.bitmap_store,
-            local_ann_store=self.local_ann_store,
-        )
+        self._install_scheduler()
 
     def search(self, query: FilteredQuery):
         dataset = self._dataset()
@@ -89,6 +81,7 @@ class CrackFANNSystem:
         plan = self.planner.choose(cover, candidate_count, dataset.n, tree.cells, query.k)
         self.last_plan_reason = plan.reason
         result = scheduler.execute(plan, query, cover)
+        self._record_boundary_observations(query, cover)
         self._update_cell_stats(query.timestamp, cover, result.distance_computations, candidate_count)
         tick_interval = int(self.config.get("designer", {}).get("tick_interval", 100))
         if tick_interval > 0 and query.query_id > 0 and query.query_id % tick_interval == 0:
@@ -98,7 +91,8 @@ class CrackFANNSystem:
     def designer_tick(self, timestamp: int) -> None:
         dataset = self._dataset()
         tree = self._tree()
-        for cell in tree.cells.values():
+        self._run_split_tick(timestamp)
+        for cell in list(tree.cells.values()):
             estimated_l3_cost = self.local_ann_store.estimate_query_cost(cell.data_count)
             decision = self.promotion_policy.decide(cell, estimated_l3_cost)
             if not decision.accept:
@@ -127,6 +121,110 @@ class CrackFANNSystem:
                 )
             )
 
+    def _run_split_tick(self, timestamp: int) -> None:
+        if not self.split_policy.enabled:
+            return
+        tree = self._tree()
+        values = self._dataset().attr_values(tree.attr_id)
+        split_count = 0
+        candidates = sorted(
+            list(tree.cells.values()),
+            key=lambda cell: len(self.boundary_observations.get(cell.cell_id, [])),
+            reverse=True,
+        )
+        for cell in candidates:
+            if cell.level >= MaterializationLevel.L3_LOCAL_ANN:
+                continue
+            if split_count >= self.split_policy.max_splits_per_tick:
+                break
+            decision = self.split_policy.decide(
+                cell=cell,
+                boundary_samples=self.boundary_observations.get(cell.cell_id, []),
+                timestamp=timestamp,
+                last_split_ts=self.last_split_ts.get(cell.cell_id),
+                leaf_count=len(tree.leaf_ids),
+            )
+            if not decision.accept or decision.cut is None:
+                continue
+            left_count, right_count = self._estimate_split_counts(cell, decision.cut, values)
+            if left_count < self.split_policy.min_child_size or right_count < self.split_policy.min_child_size:
+                continue
+            left, right = tree.split_leaf(cell.cell_id, decision.cut)
+            self._materialize_l1_cell(left.cell_id, values)
+            self._materialize_l1_cell(right.cell_id, values)
+            self.boundary_observations[left.cell_id] = [
+                value for value in self.boundary_observations.get(cell.cell_id, []) if left.low < value < left.high
+            ]
+            self.boundary_observations[right.cell_id] = [
+                value for value in self.boundary_observations.get(cell.cell_id, []) if right.low < value < right.high
+            ]
+            self.boundary_observations.pop(cell.cell_id, None)
+            self.last_split_ts[left.cell_id] = timestamp
+            self.last_split_ts[right.cell_id] = timestamp
+            self.action_log.append(
+                ActionRecord(
+                    ts=timestamp,
+                    action="SPLIT",
+                    cell_id=cell.cell_id,
+                    from_level=int(cell.level),
+                    to_level=int(MaterializationLevel.L1_BITMAP),
+                    predicted_gain=decision.score,
+                    realized_gain=0.0,
+                    build_ms=0.0,
+                    reason=f"{decision.reason}:cut={decision.cut:.6g}->children={left.cell_id},{right.cell_id}",
+                )
+            )
+            split_count += 1
+        if split_count:
+            self._install_scheduler()
+
+    def _estimate_split_counts(self, cell, cut: float, values: np.ndarray) -> tuple[int, int]:
+        left = (values >= cell.low) & (values < cut)
+        right = (values >= cut) & (values <= cell.high)
+        return int(left.sum()), int(right.sum())
+
+    def _record_boundary_observations(self, query: FilteredQuery, cover) -> None:
+        if not self.split_policy.enabled or not query.predicates:
+            return
+        tree = self._tree()
+        predicate = query.predicates[0]
+        for part in cover:
+            cell = tree.cells[part.cell_id]
+            samples = self.boundary_observations.setdefault(cell.cell_id, [])
+            if cell.low < predicate.low < cell.high:
+                samples.append(float(predicate.low))
+            if cell.low < predicate.high < cell.high:
+                samples.append(float(predicate.high))
+            if len(samples) > 512:
+                del samples[: len(samples) - 512]
+
+    def _materialize_l1_cell(self, cell_id: int, values: np.ndarray | None = None) -> None:
+        dataset = self._dataset()
+        tree = self._tree()
+        values = dataset.attr_values(tree.attr_id) if values is None else values
+        cell = tree.cells[cell_id]
+        mask = tree.mask_for_cell(values, cell)
+        ids = dataset.ids[mask]
+        cell.data_count = int(ids.size)
+        cell.bitmap_handle = self.bitmap_store.build(cell.cell_id, ids)
+        cell.summary_handle = None
+        cell.ann_handle = None
+        cell.level = MaterializationLevel.L1_BITMAP
+        cell.memory_bytes = self.bitmap_store.memory_bytes(cell.bitmap_handle)
+        cell.state = "ACTIVE"
+
+    def _install_scheduler(self) -> None:
+        dataset = self._dataset()
+        tree = self._tree()
+        self.scheduler = CrossCellScheduler(
+            dataset=dataset,
+            base_index=self.base_index,
+            tree=tree,
+            cells=tree.cells,
+            bitmap_store=self.bitmap_store,
+            local_ann_store=self.local_ann_store,
+        )
+
     def snapshot_cells(self, timestamp: int) -> list[dict[str, Any]]:
         tree = self._tree()
         rows = []
@@ -139,8 +237,11 @@ class CrackFANNSystem:
                     "high": cell.high,
                     "level": int(cell.level),
                     "data_count": cell.data_count,
+                    "width": cell.width,
+                    "parent_id": cell.parent_id if cell.parent_id is not None else "",
                     "query_count_total": cell.query_count_total,
                     "query_count_ema": cell.query_count_ema,
+                    "boundary_samples": len(self.boundary_observations.get(cell.cell_id, [])),
                     "memory_bytes": cell.memory_bytes,
                     "state": cell.state,
                 }
